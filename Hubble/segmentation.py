@@ -1,28 +1,29 @@
 import cv2
 import numpy as np
-from tkinter import Tk, Label, Button, Entry, filedialog, messagebox, Canvas, StringVar
+from tkinter import Tk, Label, Button, Entry, filedialog, messagebox, Canvas
 from PIL import Image, ImageTk
 import threading
 
 
-def detect_needle(image, center_x, center_y, radius):
+def detect_needle_by_segmentation(image, center_x, center_y, radius):
+    """Phân đoạn hình ảnh và phát hiện kim bằng cách phân đoạn cạnh."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 50, 150, apertureSize=3)
-    lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=100, minLineLength=50, maxLineGap=10)
-    if lines is None:
-        return edges, None
-    filtered_lines = []
-    radius_min, radius_max = 0.1 * radius, 0.9 * radius
-    for line in lines:
-        x1, y1, x2, y2 = line[0]
-        dist1_sq = (x1 - center_x)**2 + (y1 - center_y)**2
-        dist2_sq = (x2 - center_x)**2 + (y2 - center_y)**2
-        if radius_min**2 < dist1_sq < radius_max**2 and radius_min**2 < dist2_sq < radius_max**2:
-            filtered_lines.append((x1, y1, x2, y2))
-    return edges, filtered_lines
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)  # Làm mờ để giảm nhiễu
+    edges = cv2.Canny(blurred, 50, 150, apertureSize=3)
+
+    # Chỉ quan tâm đến vùng quanh tâm với bán kính xác định
+    mask = np.zeros_like(edges)
+    cv2.circle(mask, (center_x, center_y), radius, 255, -1)
+    segmented_edges = cv2.bitwise_and(edges, mask)
+
+    # Phát hiện các đường thẳng bằng Hough Lines
+    lines = cv2.HoughLinesP(segmented_edges, rho=1, theta=np.pi / 180, threshold=100, minLineLength=50, maxLineGap=10)
+    
+    return segmented_edges, lines
 
 
 def calculate_angle(center_x, center_y, x1, y1, x2, y2):
+    """Tính góc của kim đồng hồ dựa trên hai điểm của đường thẳng."""
     dist1_sq = (x1 - center_x)**2 + (y1 - center_y)**2
     dist2_sq = (x2 - center_x)**2 + (y2 - center_y)**2
     if dist1_sq > dist2_sq:
@@ -36,6 +37,7 @@ def calculate_angle(center_x, center_y, x1, y1, x2, y2):
 
 
 def map_angle_to_value(angle, min_angle, max_angle, min_value, max_value):
+    """Chuyển góc thành giá trị tương ứng trong phạm vi của đồng hồ đo."""
     if angle < min_angle:
         value = min_value + (max_value - min_value) * (min_angle - angle) / 270
     elif angle > max_angle:
@@ -144,9 +146,11 @@ class VideoProcessorGUI:
             if not ret:
                 break
 
-            edges, lines = detect_needle(frame, center_x, center_y, radius)
+            # Phát hiện kim bằng phân đoạn
+            segmented_edges, lines = detect_needle_by_segmentation(frame, center_x, center_y, radius)
             output_frame = frame.copy()
 
+            # Tính toán góc của kim đồng hồ
             needle_angle = None
             if lines:
                 for x1, y1, x2, y2 in lines:
@@ -158,13 +162,15 @@ class VideoProcessorGUI:
             if needle_angle is not None:
                 gauge_value = map_angle_to_value(needle_angle, min_angle, max_angle, min_value, max_value)
 
+            # Vẽ hình tròn và tâm
             cv2.circle(output_frame, (center_x, center_y), radius, (0, 255, 0), 2)
             cv2.circle(output_frame, (center_x, center_y), 3, (0, 0, 255), -1)
 
+            # Hiển thị giá trị đồng hồ đo
             if gauge_value is not None:
                 cv2.putText(output_frame, f"Value: {gauge_value:.2f} bar", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-            # Convert frame to ImageTk format
+            # Chuyển đổi ảnh OpenCV sang Tkinter để hiển thị
             frame_rgb = cv2.cvtColor(output_frame, cv2.COLOR_BGR2RGB)
             img = ImageTk.PhotoImage(image=Image.fromarray(frame_rgb))
             self.canvas.create_image(0, 0, anchor="nw", image=img)
@@ -173,7 +179,7 @@ class VideoProcessorGUI:
         cap.release()
 
     def stop_video_processing(self):
-        """Stop the video processing by setting the stop flag to True."""
+        """Dừng video processing bằng cách thay đổi cờ stop."""
         self.stop_video_flag = True
         messagebox.showinfo("Stopped", "Video processing has been stopped.")
 
